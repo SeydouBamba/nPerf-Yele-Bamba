@@ -1,0 +1,3 @@
+.freebuff/
+**/*.log
+**/settings-local.toml

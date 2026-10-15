@@ -1,0 +1,99 @@
+version: 2
+project_name: 'speedtest-go'
+#dist: ./out
+before:
+  hooks:
+    - go mod download
+builds:
+  - main: ./main.go
+    id: speedtest-backend
+    binary: speedtest-backend
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -w -s
+    goos:
+      - windows
+      - linux
+    goarch:
+      - 386
+      - amd64
+      - arm
+      - arm64
+    goarm:
+      - 5
+      - 6
+      - 7
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+    hooks:
+      post: upx -9 "{{ .Path }}"
+  - main: ./main.go
+    id: speedtest-backend-darwin
+    binary: speedtest-backend
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -w -s
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+  - main: ./main.go
+    id: speedtest-backend-freebsd
+    binary: speedtest-backend
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -w -s
+    goos:
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+  - main: ./main.go
+    id: speedtest-backend-noupx-windows-arm64
+    binary: speedtest-backend
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -w -s
+    goos:
+      - windows
+    goarch:
+      - arm
+      - arm64
+    goarm:
+      - 5
+      - 6
+      - 7
+archives:
+  - format_overrides:
+      - goos: windows
+        formats: zip
+    files:
+      - README.md
+      - LICENSE
+      - settings.toml
+checksum:
+  name_template: 'checksums.txt'
+changelog:
+  disable: false
+  sort: asc
+release:
+  github:
+    owner: librespeed
+    name: speedtest-go
+  disable: false

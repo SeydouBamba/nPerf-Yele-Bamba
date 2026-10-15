@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+  <meta name="description"
+    content="Yele - Test de Vitesse Internet. Testez votre connexion maintenant." />
+  <link rel="shortcut icon" href="images/logo.png" />
+  <script type="text/javascript" src="speedtest.js"></script>
+  <script type="text/javascript">
+    // Set this to a different URL to load the server list from another location.
+    var SPEEDTEST_SERVERS = "server-list.json";
+  </script>
+  <script type="text/javascript" src="javascript/index.js"></script>
+  <link rel="stylesheet" type="text/css" href="styling/index.css" />
+  <title>Yele - Test de Vitesse Internet</title>
+</head>
+
+<body>
+  <header>
+    <img src="images/logo.png" alt="Yele" class="logo" />
+  </header>
+  <main>
+    <h1>Test de Vitesse Internet</h1>
+    <p class="tagline">Mesurez votre connexion en quelques secondes</p>
+
+    <div class="server-selector">
+      <div class="chosen">
+        <div class="chevron">
+          <img src="images/chevron.svg" alt="select..." />
+        </div>
+        <p>current server</p>
+        <h2 id="selected-server">searching nearest server...</h2>
+      </div>
+      <ul class="servers"></ul>
+      <p class="sponsor" id="sponsor">&nbsp;</p>
+    </div>
+
+    <p id="privacy-warning" class="hidden">
+      En cliquant sur le bouton de démarrage, vous acceptez notre politique de confidentialité<br />
+      <a href="#" id="choose-privacy">ou consultez nos options de confidentialité</a>
+    </p>
+    <button class="disabled" id="start-button"></button>
+
+    <div class="gauge-layout">
+      <div class="ping hidden">
+        <span class="label">Ping</span>:&nbsp;
+        <span class="value" id="ping">00</span>ms
+      </div>
+
+      <div class="gauge download" id="download-gauge">
+        <div class="progress"></div>
+        <div class="speed"></div>
+        <h1><span id="download-speed">00</span> Mbps</h1>
+        <h2>Download</h2>
+      </div>
+
+      <div class="gauge upload" id="upload-gauge">
+        <div class="progress"></div>
+        <div class="speed"></div>
+        <h1><span id="upload-speed">00</span> Mbps</h1>
+        <h2>Upload</h2>
+      </div>
+
+      <div class="jitter hidden">
+        <span class="label">Jitter</span>:&nbsp;
+        <span class="value" id="jitter">00</span>ms
+      </div>
+    </div>
+
+    <button class="small inverted hidden" id="share-results">
+      Partager les résultats
+    </button>
+  </main>
+  <footer>
+   
+  </footer>
+
+  <dialog id="share">
+    <div class="close-dialog">
+      <img src="images/close-button.svg" alt="Fermer" />
+    </div>
+    <img id="results" src="" alt="Résultats du test en forme graphique" />
+    <button id="copy-link">Copier le lien</button>
+  </dialog>
+
+  <dialog id="privacy">
+    <div class="close-dialog">
+      <img src="images/close-button.svg" alt="Fermer" />
+    </div>
+    <section>
+      <h1>Politique de Confidentialité</h1>
+      <p>
+        Ce service de test de vitesse Yele est configuré avec la télémétrie activée.
+      </p>
+
+      <h2>Quelles données nous collectons</h2>
+      <p>
+        À la fin du test, les données suivantes sont collectées et stockées:
+      </p>
+
+      <ul>
+        <li>ID du test</li>
+        <li>Date et heure du test</li>
+        <li>Résultats du test (vitesse de téléchargement et d'upload, ping et jitter)</li>
+        <li>Adresse IP</li>
+        <li>Informations du fournisseur d'accès (FAI)</li>
+        <li>Localisation approximative (déterminée par l'adresse IP, pas GPS)</li>
+        <li>User agent et langue du navigateur</li>
+        <li>Journal du test (ne contient pas d'informations personnelles)</li>
+      </ul>
+
+      <h2>Comment nous utilisons les données</h2>
+      <p>Les données collectées via ce service sont utilisées pour:</p>
+
+      <ul>
+        <li>
+          Permettre le partage des résultats du test (image partageable, etc.)
+        </li>
+        <li>
+          Améliorer le service offert (par exemple, détecter les problèmes)
+        </li>
+      </ul>
+
+      <p>Aucune information personnelle n'est divulguée à des tiers.</p>
+
+      <h2>Votre consentement</h2>
+      <p>
+        En démarrant le test, vous consentez aux termes de cette politique de confidentialité.
+      </p>
+
+      <h2>Suppression des données</h2>
+      <p>
+        Si vous souhaitez faire supprimer vos informations, vous devez fournir soit l'ID du test, soit votre adresse IP. C'est la seule façon d'identifier vos données.
+      </p>
+      <p>
+        Contactez l'adresse email suivante pour toute demande de suppression:
+        <a href="mailto:PUT@YOUR_EMAIL.HERE">À REMPLIR PAR LE DÉVELOPPEUR</a>.
+      </p>
+    </section>
+    <button id="close-privacy">Fermer</button>
+  </dialog>
+</body>
+
+</html>

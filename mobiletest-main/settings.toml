@@ -1,0 +1,56 @@
+# bind address, use empty string to bind to all interfaces
+bind_address=""
+# backend listen port
+listen_port=8989
+# change the base URL
+# url_base="/librespeed"
+# proxy protocol port, use 0 to disable
+proxyprotocol_port=0
+# Leave unset to resolve the actual server location from its public IP.
+# ipinfo.io API key — NE PAS committer de valeur ici.
+# Définir via la variable d'environnement SPEEDTEST_IPINFO_API_KEY.
+ipinfo_api_key=""
+
+# assets directory path, defaults to `assets` in the same directory
+assets_path=""
+
+# password for logging into statistics page
+# NE PAS committer de valeur : définir via SPEEDTEST_STATISTICS_PASSWORD.
+statistics_password=""
+# redact IP addresses
+redact_ip_addresses=false
+
+# database type: none, memory, bolt, mysql, postgresql, sqlite, mssql, mongodb
+database_type="mongodb"
+
+# MongoDB Atlas connection string (used when database_type="mongodb")
+# Set via environment variable SPEEDTEST_DATABASE_CONNECTION_STRING on Render
+database_connection_string=""
+
+# MongoDB database name (default: yele_speedtest)
+database_name="yele_speedtest"
+
+# URL du micro-service IA (FastAPI), proxifié sous /api/ai/*.
+# Vide = désactivé. À définir via SPEEDTEST_AI_SERVICE_URL sur Render.
+# Exemple local : ai_service_url="http://localhost:8000"
+ai_service_url=""
+
+# Legacy SQL settings (unused when database_type="mongodb")
+database_hostname=""
+database_username=""
+database_password=""
+database_port=""
+database_file="speedtest.db"
+
+# GeoIP offline database (.mmdb format) for ISP and country detection when ipinfo.io API is not available
+# This is used as a fallback, matching the PHP backend behavior.
+# Leave empty to disable.
+# geoip_database_file="country_asn.mmdb"
+
+# TLS and HTTP/2 settings. TLS is required for HTTP/2
+enable_tls=false
+enable_http2=false
+
+# if you use HTTP/2 or TLS, you need to prepare certificates and private keys
+# tls_cert_file="cert.pem"
+# tls_key_file="privkey.pem"

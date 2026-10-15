@@ -1,0 +1,779 @@
+import 'package:flutter/material.dart';
+
+import '../models/speed_test_result.dart';
+import '../services/app_preferences.dart';
+import '../services/local_storage_service.dart';
+import '../services/quality_score.dart';
+import '../services/speed_test_api_service.dart';
+import '../theme/yele_theme.dart';
+import '../widgets/qoe_dialog.dart';
+import '../widgets/streaming_table.dart';
+import '../widgets/yele_scaffold.dart';
+
+/// Écran "Score" — bilan d'un test, affiché AVANT le questionnaire QoE.
+/// L'utilisateur consulte ses résultats, puis évalue la qualité ressentie ;
+/// l'enregistrement local + envoi au serveur ont lieu à ce moment-là.
+/// Choix « ne montrer que le mesurable » : note de qualité dérivée du débit,
+/// pas de score en points arbitraire.
+class ScoreScreen extends StatefulWidget {
+  final SpeedTestResult result;
+  const ScoreScreen({super.key, required this.result});
+
+  @override
+  State<ScoreScreen> createState() => _ScoreScreenState();
+}
+
+class _ScoreScreenState extends State<ScoreScreen> {
+  final _api = SpeedTestApiService();
+  final _storage = LocalStorageService();
+  bool _saved = false;
+  bool _qoeDone = false;
+  String _speedUnit = AppPreferences.speedUnit.value;
+
+  SpeedTestResult get r => widget.result;
+
+  bool get _speedDone => r.downloadSpeed > 0 || r.uploadSpeed > 0;
+
+  @override
+  void initState() {
+    super.initState();
+    AppPreferences.backgroundStyle.addListener(_onBackgroundStyleChanged);
+    AppPreferences.speedUnit.addListener(_onSpeedUnitChanged);
+    // ISS-09 : la mesure est enregistrée et transmise DÈS l'affichage du bilan.
+    // Auparavant l'envoi attendait la validation du QoE (ou la sortie de
+    // l'écran) : le dashboard restait vide tant que l'utilisateur n'avait pas
+    // répondu, et une fermeture brutale de l'application perdait la mesure.
+    // Le QoE est ensuite rattaché à cette mesure (voir _sendQoe).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _finalize();
+    });
+  }
+
+  @override
+  void dispose() {
+    AppPreferences.backgroundStyle.removeListener(_onBackgroundStyleChanged);
+    AppPreferences.speedUnit.removeListener(_onSpeedUnitChanged);
+    super.dispose();
+  }
+
+  void _onBackgroundStyleChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onSpeedUnitChanged() {
+    if (mounted) {
+      setState(() => _speedUnit = AppPreferences.speedUnit.value);
+    }
+  }
+
+  Future<void> _finalize() async {
+    if (_saved) return;
+    _saved = true;
+    try {
+      await _storage.saveResult(r);
+      r.isUploaded = await _api.uploadTestResult(r);
+    } catch (_) {
+      // Échec d'enregistrement non bloquant pour l'affichage.
+    }
+  }
+
+  Future<void> _openQoe() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => QoeDialog(
+        onCompleted: (rating, usage, satisfaction) {
+          r.qoeRating = rating;
+          r.qoeUsage = usage;
+          r.qoeSatisfaction = satisfaction;
+        },
+      ),
+    );
+    // ISS-09 : la mesure est déjà partie — on rattache la note à cette mesure.
+    await _sendQoe();
+    if (!mounted) return;
+    setState(() => _qoeDone = true);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Évaluation enregistrée ✓')));
+  }
+
+  /// Enregistre la note QoE et la rattache à la mesure déjà envoyée (ISS-09).
+  ///
+  /// Sans cet appel, la note resterait dans le seul historique local : l'envoi
+  /// de la mesure a eu lieu bien avant que l'utilisateur ne réponde.
+  Future<void> _sendQoe() async {
+    try {
+      // Même identité locale qu'à l'envoi : l'entrée est mise à jour, pas
+      // dupliquée.
+      await _storage.saveResult(r);
+    } catch (_) {
+      // Échec d'enregistrement local non bloquant pour l'affichage.
+    }
+    await _api.updateQoe(r);
+  }
+
+  // ── Qualité dérivée du débit descendant (seuils documentés) ──
+  ({String label, Color color}) get _quality {
+    final score = _qualityScore;
+    final label = QualityScore.label(score);
+    final color = switch (label) {
+      'Excellent' => YeleColors.good,
+      'Très bon' => YeleColors.testBot,
+      'Bon' => YeleColors.warn,
+      'Moyen' => YeleColors.g4,
+      _ => YeleColors.danger,
+    };
+    return (label: '$label · $score/100', color: color);
+  }
+
+  int get _qualityScore => QualityScore.calculate(
+    downloadMbps: r.downloadSpeed,
+    uploadMbps: r.uploadSpeed,
+    latencyMs: r.ping,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      onPopInvokedWithResult: (didPop, _) => _finalize(),
+      child: YeleScaffold(
+        title: 'Résultat du test',
+        route: '/full',
+        body: Container(
+          decoration: BoxDecoration(
+            gradient: testGradientFor(AppPreferences.backgroundStyle.value),
+          ),
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  const SizedBox(height: 12),
+                  _serverBar(),
+                  // N'affiche que les sections du/des test(s) réellement faits.
+                  if (_speedDone) ...[
+                    _metrics(),
+                    _qualityBand(),
+                    _detailsCard(),
+                  ],
+                  // Affiché aussi en cas d'échec, pour en montrer la raison.
+                  if (r.hasStreamingTest || r.streamingError != null)
+                    _streamingCard(),
+                  if (r.hasBrowsingTest) _browsingCard(),
+                  _bottomInfo(),
+                  _actions(),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _serverBar() {
+    return Container(
+      color: YeleColors.panel,
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Container(width: 26, height: 20, color: const Color(0xFF16557E)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Serveur de test · ${r.server}',
+              style: const TextStyle(color: Color(0xFF33402A), fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metrics() {
+    Widget m(String label, String val, String unit, String sub) {
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+          child: Column(
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF2C3650),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                val,
+                style: const TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: YeleColors.field,
+                  height: 1.1,
+                ),
+              ),
+              Text(
+                unit,
+                style: const TextStyle(fontSize: 13, color: YeleColors.field),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                sub,
+                style: const TextStyle(fontSize: 11, color: YeleColors.muted),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      color: YeleColors.panel,
+      child: Row(
+        children: [
+          m('▼ Download', _speedDisplay(r.downloadSpeed), _speedUnit, ''),
+          m('▲ Upload', _speedDisplay(r.uploadSpeed), _speedUnit, ''),
+          m(
+            '↔ Latence',
+            r.ping.toStringAsFixed(0),
+            'ms',
+            'Gigue : ${r.jitter.toStringAsFixed(0)} ms',
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Volet « détail de la mesure » : min/moy/max du débit et de la latence
+  /// (ISS-06), RSRP/RSRQ de la cellule servante (ISS-01) et consommation de
+  /// données du test (IMP-01). Chaque ligne n'apparaît que si la donnée a été
+  /// réellement mesurée — un ancien résultat n'affiche pas de valeurs vides.
+  Widget _detailsCard() {
+    final lines = <({String k, String v})>[];
+
+    if (r.minDownloadSpeed != null && r.maxDownloadSpeed != null) {
+      lines.add((
+        k: 'Débit min / moy / max',
+        v:
+            '${_speedDisplay(r.minDownloadSpeed!)} / '
+            '${_speedDisplay(r.avgDownloadSpeed ?? r.downloadSpeed)} / '
+            '${_speedDisplay(r.maxDownloadSpeed!)} $_speedUnit',
+      ));
+    }
+    if (r.minUploadSpeed != null &&
+        r.avgUploadSpeed != null &&
+        r.maxUploadSpeed != null) {
+      lines.add((
+        k: 'Débit montant min / moy / max',
+        v:
+            '${_speedDisplay(r.minUploadSpeed!)} / '
+            '${_speedDisplay(r.avgUploadSpeed!)} / '
+            '${_speedDisplay(r.maxUploadSpeed!)} $_speedUnit',
+      ));
+    }
+    if (r.minPing != null && r.maxPing != null) {
+      lines.add((
+        k: 'Latence min / moy / max',
+        v:
+            '${r.minPing!.toStringAsFixed(0)} / '
+            '${(r.avgPing ?? r.ping).toStringAsFixed(0)} / '
+            '${r.maxPing!.toStringAsFixed(0)} ms',
+      ));
+    }
+    if (r.rsrp != null || r.rsrq != null) {
+      lines.add((
+        k: 'RSRP / RSRQ',
+        v:
+            '${r.rsrp != null ? '${r.rsrp} dBm' : '—'} / '
+            '${r.rsrq != null ? '${r.rsrq} dB' : '—'}',
+      ));
+    }
+    if (r.dataConsumedKb != null) {
+      lines.add((k: 'Données consommées', v: _fmtData(r.dataConsumedKb!)));
+    }
+    // ISS-08 : durée réellement passée dans le test, et où elle est passée.
+    // Sans ce détail, « le test est long » n'est pas exploitable.
+    if (r.durationLabel != null) {
+      lines.add((k: 'Durée du test', v: r.durationLabel!));
+    }
+    final phases = TestPhaseTimings.breakdown(
+      r.phaseTimingsJson,
+    ).where((p) => p.seconds >= 0.5).toList();
+    if (phases.isNotEmpty) {
+      lines.add((
+        k: 'Répartition',
+        v: phases
+            .map(
+              (p) =>
+                  '${_phaseShortLabels[p.label] ?? p.label} ${p.seconds.toStringAsFixed(0)} s',
+            )
+            .join(' · '),
+      ));
+    }
+
+    if (lines.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Text('📶', style: TextStyle(fontSize: 18)),
+              SizedBox(width: 8),
+              Text(
+                'Détail de la mesure',
+                style: TextStyle(
+                  color: YeleColors.ink,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final l in lines)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    l.k,
+                    style: const TextStyle(
+                      color: YeleColors.muted,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Flexible(
+                    child: Text(
+                      l.v,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        color: YeleColors.ink,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Libellés courts pour la ligne « Répartition » (ISS-08) : la ligne doit
+  /// tenir sur la largeur d'un téléphone, pas sur celle d'un rapport.
+  static const Map<String, String> _phaseShortLabels = {
+    'Initialisation': 'Init.',
+    'Débit descendant': 'Descendant',
+    'Débit montant': 'Montant',
+    'Streaming vidéo': 'Streaming',
+    'Navigation web': 'Navigation',
+  };
+
+  /// Volume en ko → « Mo » / « Go » selon l'ordre de grandeur.
+  String _fmtData(int kb) {
+    if (kb >= 1024 * 1024) {
+      return '${(kb / 1024 / 1024).toStringAsFixed(2)} Go';
+    }
+    if (kb >= 1024) return '${(kb / 1024).toStringAsFixed(1)} Mo';
+    return '$kb Ko';
+  }
+
+  String _speedDisplay(double mbps) =>
+      displaySpeedValue(mbps, _speedUnit).toStringAsFixed(2);
+
+  Widget _qualityBand() {
+    final q = _quality;
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF1C2419), Color(0xFF10160D)],
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Center(
+        child: Container(
+          width: 160,
+          height: 160,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const RadialGradient(
+              center: Alignment(0, -0.2),
+              colors: [Color(0xFF1C2419), Color(0xFF0C1108)],
+            ),
+            border: Border.all(color: q.color, width: 7),
+          ),
+          alignment: Alignment.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'QUALITÉ',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                q.label,
+                style: TextStyle(
+                  color: q.color,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Score global $_qualityScore/100',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Carte de résultat d'un test, avec en-tête coloré et lignes clé/valeur.
+  Widget _resultCard(
+    String icon,
+    String title,
+    Color color,
+    double score,
+    List<({String k, String v})> lines,
+  ) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)],
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(12),
+              ),
+            ),
+            child: Row(
+              children: [
+                Text(icon, style: const TextStyle(fontSize: 20)),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '${score.toStringAsFixed(0)}/100',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              children: [
+                for (final l in lines)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          l.k,
+                          style: const TextStyle(
+                            color: YeleColors.muted,
+                            fontSize: 13,
+                          ),
+                        ),
+                        Text(
+                          l.v,
+                          style: const TextStyle(
+                            color: YeleColors.ink,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Streaming : tableau par qualité (720p/1080p/2160p), façon nPerf.
+  /// Repli sur l'ancienne carte pour les résultats enregistrés avant ce test.
+  Widget _streamingCard() {
+    final rows = r.streamingQualities;
+    final error = r.streamingError;
+    if (rows.isEmpty && error != null) return _streamingError(error);
+    if (rows.isEmpty) {
+      return _resultCard(
+        '🎬',
+        'Streaming vidéo',
+        YeleColors.g5,
+        r.streamingScore ?? 0,
+        [
+          (k: 'Résolution max soutenue', v: r.streamingMaxResolution ?? '—'),
+          (k: 'Démarrage', v: '${r.streamingStartupMs ?? 0} ms'),
+          (k: 'Interruptions', v: '${r.streamingRebufferCount ?? 0}'),
+        ],
+      );
+    }
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+          child: Row(
+            children: [
+              const Text('🎬', style: TextStyle(fontSize: 18)),
+              const SizedBox(width: 8),
+              const Text(
+                'Streaming vidéo',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${(r.streamingScore ?? 0).toStringAsFixed(0)}/100',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+        StreamingTable(qualities: rows),
+        if (error != null) _streamingError(error),
+      ],
+    );
+  }
+
+  /// Explique un test de streaming sans mesure : sans ce message, un échec
+  /// technique ressemblerait à un réseau simplement trop faible.
+  Widget _streamingError(String message) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: YeleColors.warn, width: 1.5),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: YeleColors.warn,
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(fontSize: 13, color: YeleColors.ink),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _browsingCard() {
+    return _resultCard(
+      '🌐',
+      'Navigation web',
+      YeleColors.primary,
+      r.browsingScore ?? 0,
+      [
+        (
+          k: 'Temps de chargement moyen',
+          v: '${((r.browsingAvgLoadMs ?? 0) / 1000).toStringAsFixed(1)} s',
+        ),
+        (
+          k: 'Taux de réussite',
+          v: '${((r.browsingSuccessRate ?? 0) * 100).toStringAsFixed(0)} %',
+        ),
+        (k: 'Pages testées', v: '${r.browsingPagesTested ?? 0}'),
+      ],
+    );
+  }
+
+  Widget _bottomInfo() {
+    Widget c(String label, String value) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          decoration: const BoxDecoration(
+            border: Border(right: BorderSide(color: YeleColors.line)),
+          ),
+          child: Column(
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  color: YeleColors.field,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF2C3650), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: YeleColors.panel,
+        border: Border(top: BorderSide(color: YeleColors.primary, width: 2)),
+      ),
+      child: Row(
+        children: [
+          c('Connexion', r.isWifiTest ? 'Wi-Fi' : (r.networkType ?? '—')),
+          c('FAI', r.operator ?? '—'),
+          // ISS-03 : sur un test WiFi, la SIM ne portait pas le trafic — on
+          // affiche le réseau WiFi mesuré à sa place.
+          r.isWifiTest
+              ? c('Réseau Wi-Fi', r.wifiLabel ?? '—')
+              : c('Réseau mobile', _mobileLabel),
+        ],
+      ),
+    );
+  }
+
+  /// « 4G · Orange · SIM 2 », « 4G », ou « — » selon les mesures disponibles.
+  /// Le suffixe SIM n'apparaît que si l'appareil était bi-SIM, pour lever
+  /// l'ambiguïté sur l'opérateur réellement mesuré (ISS-02).
+  String get _mobileLabel {
+    final tech = r.cellularTech;
+    final sim = r.simOperator;
+    if ((tech == null || tech.isEmpty) && (sim == null || sim.isEmpty)) {
+      return '—';
+    }
+    String label;
+    if (sim != null && sim.isNotEmpty && tech != null && tech.isNotEmpty) {
+      label = '$tech · $sim';
+    } else {
+      label = (tech != null && tech.isNotEmpty) ? tech : sim!;
+    }
+    return r.simSlot != null ? '$label · SIM ${r.simSlot! + 1}' : label;
+  }
+
+  Widget _actions() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+      child: Column(
+        children: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _qoeDone ? null : _openQoe,
+              icon: Icon(_qoeDone ? Icons.check_circle : Icons.rate_review),
+              label: Text(
+                _qoeDone
+                    ? 'Évaluation enregistrée'
+                    : 'Évaluer la qualité (QoE)',
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: YeleColors.primary,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: YeleColors.good,
+                disabledForegroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    await _finalize();
+                    if (mounted) Navigator.of(context).pop();
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Recommencer'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: YeleColors.ink,
+                    backgroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    await _finalize();
+                    if (mounted) {
+                      Navigator.of(context).pushReplacementNamed('/history');
+                    }
+                  },
+                  icon: const Icon(Icons.history),
+                  label: const Text('Historique'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: YeleColors.ink,
+                    backgroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}

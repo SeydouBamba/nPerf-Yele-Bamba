@@ -1,0 +1,107 @@
+package config
+
+import (
+	log "github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
+)
+
+type Config struct {
+	BindAddress       string  `mapstructure:"bind_address"`
+	Port              string  `mapstructure:"listen_port"`
+	BaseURL           string  `mapstructure:"url_base"`
+	ProxyProtocolPort string  `mapstructure:"proxyprotocol_port"`
+	ServerLat         float64 `mapstructure:"server_lat"`
+	ServerLng         float64 `mapstructure:"server_lng"`
+	IPInfoAPIKey      string  `mapstructure:"ipinfo_api_key"`
+
+	StatsPassword       string `mapstructure:"statistics_password"`
+	RedactIP            bool   `mapstructure:"redact_ip_addresses"`
+	EnableIDObfuscation bool   `mapstructure:"enable_id_obfuscation"`
+
+	AssetsPath string `mapstructure:"assets_path"`
+
+	DatabaseType     string `mapstructure:"database_type"`
+	DatabaseHostname string `mapstructure:"database_hostname"`
+	DatabaseName     string `mapstructure:"database_name"`
+	DatabaseUsername string `mapstructure:"database_username"`
+	DatabasePassword string `mapstructure:"database_password"`
+
+	DatabaseFile             string `mapstructure:"database_file"`
+	DatabasePort             string `mapstructure:"database_port"`
+	DatabaseConnectionString string `mapstructure:"database_connection_string"`
+
+	GeoIPDatabaseFile string `mapstructure:"geoip_database_file"`
+
+	// ISPInfoForPrivateIP : quand le client est sur un réseau privé (test local,
+	// LAN, tunnel `adb reverse`), résoudre le FAI du lien Internet du serveur au
+	// lieu de répondre « IP privée » sans opérateur. Sans effet derrière un proxy
+	// public (l'IP client y est publique). Destiné aux instances de dev.
+	ISPInfoForPrivateIP bool `mapstructure:"isp_info_for_private_ip"`
+
+	// URL du micro-service IA (FastAPI) proxifié sous /api/ai/*.
+	// Vide = fonctionnalité désactivée.
+	AIServiceURL string `mapstructure:"ai_service_url"`
+
+	EnableHTTP2 bool   `mapstructure:"enable_http2"`
+	EnableTLS   bool   `mapstructure:"enable_tls"`
+	TLSCertFile string `mapstructure:"tls_cert_file"`
+	TLSKeyFile  string `mapstructure:"tls_key_file"`
+}
+
+var (
+	configFile   string
+	loadedConfig *Config = nil
+)
+
+func init() {
+	viper.SetDefault("listen_port", "8989")
+	viper.SetDefault("url_base", "")
+	viper.SetDefault("proxyprotocol_port", "0")
+	viper.SetDefault("download_chunks", 4)
+	viper.SetDefault("distance_unit", "K")
+	viper.SetDefault("enable_cors", false)
+	viper.SetDefault("statistics_password", "PASSWORD")
+	viper.SetDefault("redact_ip_addresses", false)
+	viper.SetDefault("database_type", "postgresql")
+	viper.SetDefault("database_hostname", "localhost")
+	viper.SetDefault("database_name", "speedtest")
+	viper.SetDefault("database_username", "postgres")
+	viper.SetDefault("enable_tls", false)
+	viper.SetDefault("enable_http2", false)
+
+	viper.SetConfigName("settings")
+	viper.AddConfigPath(".")
+
+	// Secrets lus depuis l'environnement (préfixe SPEEDTEST_), jamais commités.
+	// Ex. SPEEDTEST_IPINFO_API_KEY, SPEEDTEST_STATISTICS_PASSWORD,
+	//     SPEEDTEST_DATABASE_CONNECTION_STRING.
+	_ = viper.BindEnv("ipinfo_api_key")
+	_ = viper.BindEnv("statistics_password")
+	_ = viper.BindEnv("database_connection_string")
+	_ = viper.BindEnv("ai_service_url")
+}
+
+func Load(configPath string) Config {
+	var conf Config
+
+	configFile = configPath
+	viper.SetConfigFile(configPath)
+	viper.SetEnvPrefix("speedtest")
+	viper.AutomaticEnv()
+	viper.ReadInConfig()
+
+	if err := viper.Unmarshal(&conf); err != nil {
+		log.Fatalf("Error parsing config: %s", err)
+	}
+
+	loadedConfig = &conf
+
+	return conf
+}
+
+func LoadedConfig() *Config {
+	if loadedConfig == nil {
+		Load(configFile)
+	}
+	return loadedConfig
+}
